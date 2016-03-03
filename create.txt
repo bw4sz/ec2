@@ -1,0 +1,30 @@
+#!/bin/bash
+
+#Boot a free tier machine with the Rstudio ami
+#aws ec2 run-instances --count 2 --image-id ami-0ea84c3d --instance-type t2.micro --key-name ec2  --instance-initiated-shutdown-behavior terminate  --security-groups mygroup
+
+#Get the names
+dns=$(aws ec2 describe-instances --query 'Reservations[*].Instances[*].PublicDnsName' --output text | grep a)
+echo $dns
+
+#Push credentials to server (not ideal, but alteast its local)
+#convert to array
+d=($dns)
+
+echo $d
+
+#Upload credentials
+for i in ${!dns[@]}; do	
+	#upload the init file
+	scp -i C:/Users/Ben/Dropbox/Amazon/ec2.pem  install.R ubuntu@${d[$i]}:~
+done
+
+#perform some tasks
+
+
+#kill
+ids=$(aws ec2 describe-instances --query 'Reservations[*].Instances[*].InstanceId' --output text)
+for i in $ids; do
+echo $i
+aws ec2 terminate-instances --instance-ids $i
+done
