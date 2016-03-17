@@ -28,3 +28,5 @@ for i in $ids; do
 echo $i
 aws ec2 terminate-instances --instance-ids $i
 done
+
+aws ec2 run-instances --count 2 --image-id ami-1d7f657c --instance-type t2.micro --key-name ec2  --instance-initiated-shutdown-behavior terminate  --security-groups mygroup 

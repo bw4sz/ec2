@@ -21,7 +21,9 @@ output: html_document
 
 [VI. Cloning a Git repository on your Amazon EC2 instance][]
 
-[VI. Automating this entire process with bash scripts][]
+[VII. Installing and configuring the AWS Command Line Interface (CLI)][]
+
+[VIII. Using CLI to create and connect to EC2 instances][]
 
 
 ```{r preliminaries, include=FALSE}
@@ -139,13 +141,13 @@ We will know generate an SSH key (two files - a public key that you share and a 
 
 OK, let's configure and launch our Amazon EC2 instance. We can access it via the browser, as well as SSH from the terminal. An instance is a virtual machine that runs an AMI, which specifices its software configuration. You can start with a bare-bones unbuntu image and install R, etc, but that is time consuming. Fortunately, there are many community AMI's available that are preconfigured for different tasks.  Louis Aslett has created an [RStudio Server AMI](http://www.louisaslett.com/RStudio_AMI/) that we will use.
 
-1.  Go to the [EC2 Dashboard](https://us-west-2.console.aws.amazon.com/ec2/v2/home?region=us-west-2#) under the AWS Management Console.
+1.  Go to the [EC2 Dashboard](https://us-west-2.console.aws.amazon.com/ec2/v2/home?region=us-west-2#) under the [AWS Management Console](https://us-west-1.console.aws.amazon.com/console/home?region=us-west-1).
 
 2.  Make sure the region selected in the top right is as close to you as possible. If not change it.
 
 3.  Click launch instance.
 
-4.  Click community AMIs, and type in `ami-1d7f657c`. This is the [RStudio Server AMI](http://www.louisaslett.com/RStudio_AMI/) matching my region (Oregon).
+4.  Click community AMIs, and type in `ami-d1e792b1`. This is the [RStudio Server AMI](http://www.louisaslett.com/RStudio_AMI/) matching my region (Oregon).
 
 5.  Select Free-Tier eligible to get started. Later as you do more intensive runs, you can alter these hardware settings.
 
@@ -225,7 +227,7 @@ Here we access your instance via SSH from the terminal. Why do this? Simple - sc
     ```bash
     ssh -i /path/AmazonPrivateKey.pem user_name@public_dns_name
     ```
-    
+  
     For me this is:
       
     ```bash    
@@ -264,8 +266,44 @@ Here we access your instance via SSH from the terminal. Why do this? Simple - sc
     -rw------- 1 ubuntu ubuntu  399 Mar 15 16:45 authorized_keys
     -rw------- 1 ubuntu ubuntu 3243 Mar 15 18:32 id_rsa
     ```
+4. Sometimes as this point there is a permissions error, where the user ubuntu (you) is not the owner of the home directory. This make it impossible to clone your Git repository there. To check this type:
+
+    ```bash
+    cd /home
+    cd ..
+    ls -l
+    ```
+  Looking below, I see that root is the owner of home.
+  
+    ```bash
+    ubuntu@ip-172-31-30-91:/$ ls -l
+    total 76
+    drwxr-xr-x   2 root root  4096 Dec 18 20:55 bin
+    drwxr-xr-x   3 root root  4096 Dec 18 20:55 boot
+    drwxr-xr-x  13 root root  3820 Mar 15 16:45 dev
+    drwxr-xr-x  99 root root  4096 Mar 15 16:45 etc
+    drwxr-xr-x   5 root root  4096 Mar 15 20:43 home
+    ``` 
     
-4. FYI, to logout, type `exit`. Note this doesn't kill the EC2 instance! You are just logged out of it. Go back to the [EC2 Dashboard](https://us-west-2.console.aws.amazon.com/ec2/v2/home?region=us-west-2#) and your instance still will be running.
+    To fix this I type:
+      
+    ```bash    
+    sudo chown -R ubuntu:ubuntu /home
+    ```
+    
+    And now, `ls -l` shows:
+    
+    ```bash
+    ubuntu@ip-172-31-30-91:/$ ls -l
+    total 76
+    drwxr-xr-x   2 root root      4096 Dec 18 20:55 bin
+    drwxr-xr-x   3 root root      4096 Dec 18 20:55 boot
+    drwxr-xr-x  13 root root      3820 Mar 15 16:45 dev
+    drwxr-xr-x  99 root root      4096 Mar 15 16:45 etc
+    drwxr-xr-x   5 ubuntu ubuntu  4096 Mar 15 20:43 home
+    ``` 
+
+5. FYI, to logout, type `exit`. Note this doesn't kill the EC2 instance! You are just logged out of it. Go back to the [EC2 Dashboard](https://us-west-2.console.aws.amazon.com/ec2/v2/home?region=us-west-2#) and your instance still will be running.
 
 <br>
 
@@ -273,7 +311,7 @@ Here we access your instance via SSH from the terminal. Why do this? Simple - sc
  
 The good news is git is installed be default on this AMI. However, the bad news is we still need to install Git LFS and securely get our private key onto our instance so we can clone our repository.
 
-1. From the terminal, run a script that allows us to install Git LFS using apt-get utility.
+1. From the terminal, run a script from [packagecloud](https://packagecloud.io/github/git-lfs/install) that allows us to install Git LFS using apt-get utility.
 
     ```bash
     curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
@@ -295,16 +333,205 @@ The good news is git is installed be default on this AMI. However, the bad news 
 </div>
 <br></center>
 
-5. In the terminal, move to the home directory and then clone the master branch to this Amazon EC2 instance.
+5. In the terminal, move to the home directory and then clone the master branch to this Amazon EC2 instance. Now your Git repository is cloned to the home directory of your Amazon EC2 instance.
 
     ```bash
     cd /home
-    sudo git clone git@github.com:CCheCastaldo/MAPPPD-Model.git
+    git clone git@github.com:CCheCastaldo/MAPPPD-Model.git
     ```
     
+<br>
 
+#### VII. Installing and configuring the AWS Command Line Interface (CLI)
 
+When you log into the AWS website, you use a username (email) and password to verify who you are. To use the CLI, you will not authenticate using a username/password but instead with an access key. This is a little confusing, so remember this access key indentifies who you are to AWS. This is different from the key pair you use to connect to an instance ([III. Configuring and launching an Amazon EC2 instance][]). This is like being on a guest list to get into a convention (your AWS access key) and then having a ticket for a specific event (your instance) at the convention (your key pair).
 
+1. Create an AWS access key by going to security credentials in the [AWS console](https://us-west-2.console.aws.amazon.com/console/home?region=us-west-1).
 
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage4.png)
+</div>
+<br></center>
 
+2. Click Create New Access Key. The key is composed of two parts, your public Access Key ID and your Secret Access Key. Both of these parts are saved in a text file which you should download now.
+
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage5.png)
+</div>
+<br></center>
+
+3. Like before, let's move the key to `~/.ssh`. I'll rename it now too and change the security credentials.
+
+    ```bash
+    mv /Users/coldwater/Downloads/rootkey.csv ~/.ssh/CheCastaldoAmazonAWS.csv
+    chmod 400 ~/.ssh/CheCastaldoAmazonAWS.csv
+    ```
+    
+4. Check that it python is installed by typing `python --version` in terminal.
+
+5. If not, download and install the latest 2.7 package from the [python website](https://www.python.org/downloads/).
+
+6. Download and unzip the [AWS CLI Bundled Installer](http://docs.aws.amazon.com/cli/latest/userguide/installing.html#install-bundle-other-os)
+
+    ```bash
+    cd /users/coldwater/downloads
+    curl "https://s3.amazonaws.com/aws-cli/awscli-bundle.zip" -o "awscli-bundle.zip"
+    unzip awscli-bundle.zip
+    ```
+    
+7. Install the command line tools. From [AWS](http://docs.aws.amazon.com/cli/latest/userguide/installing.html#install-bundle-other-os), this command "installs the AWS CLI at /usr/local/aws and create the symlink aws at the /usr/local/bin directory. Using the -b option to create a symlink eliminates the need to specify the install directory in the user's $PATH variable. This should enable all users to call the AWS CLI by typing aws from any directory."
+
+    ```bash
+    sudo ./awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+    ```
+
+8. Check the install with `/usr/local/bin/aws --version`. You should see the aws-cli version.
+
+    ```bash
+    aws-cli/1.10.13 Python/2.7.10 Darwin/15.3.0 botocore/1.4.4
+    ```
+
+9. Type `aws configure`. You should now enter your access key id and secret access key from your AWS access key. To see these values quickly just type `cat ~/.ssh/CheCastaldoAmazonAWS.csv` in the terminal. Next chose the [geographic region code](http://docs.aws.amazon.com/general/latest/gr/rande.html) closest to you. You can leave the output format blank (hit enter).
+
+    ```bash
+    AWS Access Key ID [None]: AKIAIWPG6RASEO27MEUA
+    AWS Secret Access Key [None]: blahblahblah
+    Default region name: us-west-1 
+    Default output format [None]: 
+    ```
+
+10. The CLI stores the key information in a file named `credentials` and the region and output format in a file called `config` both in `~\.aws`.
+
+    ```bash
+    Christians-MacBook-Pro:.aws coldwater$ ls -la
+    total 16
+    drwxr-xr-x   4 coldwater  staff   136 Mar 16 10:51 .
+    drwxr-xr-x+ 34 coldwater  staff  1156 Mar 16 10:49 ..
+    -rw-------   1 coldwater  staff    29 Mar 16 10:51 config
+    -rw-------   1 coldwater  staff   116 Mar 16 10:41 credentials
+    ```
+
+11. Define a [security group](http://docs.aws.amazon.com/cli/latest/userguide/cli-ec2-sg.html) and add a rule for SSH access. that you will use for your EC2 instances. The vpic-id corresponds to the [EC2-VPC](http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/default-vpc.html) from your chosen region. You can create your own, or use the default, which can be found at Networking-VPC tab in the [AWS Management Console](https://us-west-1.console.aws.amazon.com/console/home?region=us-west-1).
+
+    ```bash
+    aws ec2 create-security-group --group-name CheCastaldoDefaultSecurity --description "Default Security Group" --vpc-id vpc-9c5726f9
+    ```
+    
+12. Add rule to this security group to allow SSH access to your EC2 over port 22 from any machine.
+
+    ```bash
+    aws ec2 authorize-security-group-ingress --group-name CheCastaldoDefaultSecurity --protocol tcp --port 22 --cidr 0.0.0.0/0
+    ```
+
+13. To see or delete any of these security groups type the following in terminal. These security groups will also be available to you if you launch an instance through the AWS console. Also, this is how you find the security group id, which you will need to launch your instance.
+
+    ```bash
+    aws ec2 describe-security-groups --group-names CheCastaldoDefaultSecurity
+    aws ec2 delete-security-group --group-name CheCastaldoDefaultSecurity
+    ```
+
+14. If you haven't done so already, you can create a key pair from the terminal. It is best to do this in the `~/.ssh` directory. Also alter the persmission on this key to be seen only by you. 
+
+    ```bash
+    aws ec2 create-key-pair --key-name CheCastaldoAmazon --query 'KeyMaterial' --output text > CheCastaldoAmazon.pem
+    chmod 400 ~/.ssh/CheCastaldoAmazon.pem
+    ```
+
+15. To see or delete any of these key pairs type the following in terminal. Like security groups, this key will also be available to you if you launch an instance through the AWS console.
+
+    ```bash
+    aws ec2 describe-key-pairs
+    aws ec2 delete-key-pair --key-name CheCastaldoAmazon
+    ```
+    
+<br>
+
+#### VIII. Using CLI to create and connect to EC2 instances
+
+Let's, use the run-instances command to specify the instance details. The command below specifies creates with a single CLI command an instance identical to the one we set up in Section III. Later on in this section we will combine all these commands into a single shell script, that you can exeute from the command line. For more details see [Launching an Instance Using the Amazon EC2 CLI](http://docs.aws.amazon.com/AWSEC2/latest/CommandLineReference/ec2-cli-launch-instance.html) in the AW documentation.
+
+1. Launch EC2 instance from terminal. Notice we supply the hardware configuration, the ami, the number of instances we wish to create, the name of our key pair, and our secutirity group. We also specify the shotdown behavior. Finally, we query the output from this command to get the instance id, which we save to a variable of the same name.
+
+    ```bash
+    instance_id=$(aws ec2 run-instances --image-id ami-d1e792b1 --security-group-ids sg-7342b517 --count 1 --instance-type t2.micro --key-name CheCastaldoAmazon --instance-initiated-shutdown-behavior terminate --query 'Instances[0].{d:InstanceId}' --output text)
+    ```
+    
+2. Wait until the instance is up and running before doing anything else. We really need the Public DNS to access this instance, but it takes Amazon a few minutes to create our instance in the first place. The wait command will only finish after the condition is met, here it is when our particular instance is running.
+
+    ```bash
+    aws ec2 wait instance-running --instance-ids $instance_id
+    ```
+
+3. Save the public DNS on of the instance you just created to a variable called dns. To see it type`echo $dns`.
+
+    ```bash
+    dns=$(aws ec2 describe-instances --instance-ids $instance_id --query 'Reservations[*].Instances[*].PublicDnsName' --output text | grep a)
+    ```
+
+4. Secure copy our Git Hub private key to the EC2 instance. The o, UserKnownHostsFile, StrictHostKeyChecking options removes the host verification prompt (the computer asks you to type yes or no to continue). Removing this is essential if we want to run these actions in a script.
+
+    ```bash
+    scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ~/.ssh/id_rsa ubuntu@$dns:~/.ssh/
+    ````
+
+5. Now lets put all this together with the following script called Startup.bash.
+
+    ```bash
+    #!/bin/bash
+    
+    --instance-initiated-shutdown-behavior terminate --query 'Instances[0].{d:InstanceId}' --output text)
+
+    # wait until instance is up and running
+    aws ec2 wait instance-running --instance-ids $instance_id
+
+    # retrieve public dns
+    dns=$(aws ec2 describe-instances --instance-ids $instance_id --query 'Reservations[*].Instances[*].PublicDnsName' --output text | grep a)
+
+    # secure copy git private key to instance
+    scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ~/.ssh/id_rsa ubuntu@$dns:~/.ssh/
+
+    # change permissons so ubuntu can write to home directory
+    ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ubuntu@$dns "sudo chown -R ubuntu:ubuntu /home"
+
+    # copy over Job.bash to instance
+    scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem /users/coldwater/Desktop/Job.bash ubuntu@$dns:/home
+
+    # run job script on instance
+    ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ubuntu@$dns "bash Job.bash &"
+    ```
+
+    Which call thie script called Job.bash.
+    
+    ```bash
+    #!/bin/bash
+
+    ~/.ssh/config
+
+    echo 'Host * StrictHostKeyChecking no' > ~/.ssh/config
+
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+
+    cd /usr/bin
+
+    sudo apt-get install git-lfs
+ 
+    cd /home
+ 
+    git clone git@github.com:CCheCastaldo/MAPPPD-Model.git
+    ```
+    
+6. Put all this in a bash script and run it as.
+
+    ```bash
+    bash Startup.bash &> /users/coldwater/Desktop/AWSlog.txt
+    ```  
+
+7. FYI. To kill an instance remotely.
+
+    ```bash
+    ids=$(aws ec2 describe-instances --query 'Reservations[*].Instances[*].InstanceId' --output text)
+    aws ec2 terminate-instances --instance-ids $ids
+    ```
 
