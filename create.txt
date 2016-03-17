@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #Boot a free tier machine with the Rstudio ami
-#aws ec2 run-instances --count 2 --image-id ami-0ea84c3d --instance-type t2.micro --key-name ec2  --instance-initiated-shutdown-behavior terminate  --security-groups mygroup
+#aws ec2 run-instances --count 2 --image-id ami-0ea84c3d --instance-type t2.micro --key-name rstudio  --instance-initiated-shutdown-behavior terminate  --security-groups mygroup
 
 #Get the names
 dns=$(aws ec2 describe-instances --query 'Reservations[*].Instances[*].PublicDnsName' --output text | grep a)
