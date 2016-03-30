@@ -1,0 +1,633 @@
+---
+output: html_document
+---
+
+#### Using Amazon EC2 to run Bayesian Models
+#### Chris Che-Castaldo & Ben Weinstein
+#### `r format(Sys.Date(), format="%B %d, %Y")`
+
+- - -
+
+<img src="ReadMeImage7.png" style="position:absolute;top:125px;right:200px;width:400px;height=400px" />
+
+#### Table of Contents
+
+[I. Introduction][]
+
+[II. Installing and configuring Git LFS locally][]
+
+[III. Using SSH with your Git repository][]
+
+[IV. Configuring and launching an Amazon EC2 instance][]
+
+[V. Accessing an Amazon EC2 instance in the browser][]
+
+[VI. Accessing an Amazon EC2 instance via SSH][]
+
+[VII. Cloning a Git repository on your Amazon EC2 instance][]
+
+[VIII. Installing and configuring the AWS Command Line Interface (CLI)][]
+
+[IX. Putting it all together][]
+
+[X. Final workflow][]
+
+```{r preliminaries, include=FALSE}
+rm(list=ls())
+library(knitr)
+knitr::opts_chunk$set(cache=FALSE, warnings=FALSE, tidy=FALSE)
+set.seed(5)
+```
+
+<br>
+
+#### I. Introduction
+
+While a pleasant side effect of running large Bayesian models that strain your laptop to its breaking point for hours on end is ample amounts of free time to pursue other worldly pursuits, there reaches a point where it is necessary to don one's big person pants and move all this heavy computation to the cloud. The goal of this tutorial is to (1) configure the hardware and software of an Amazon EC2 instance that we then create, (2) connect to this instance in order to clone a Git repository, run an R script (hereafter called `GenericEC2Run.R`), and save the R output, then (3) publish these changes to your project's remote Git repository as a new branch, before (4) terminating the instance. In our case, the R script `GenericEC2Run.R` will be an R markdown file that runs a JAGS model, but it could be anything you wish. Let's get started!
+
+<br>
+
+#### II. Installing and configuring git LFS locally
+
+You will need Git LFS if you plan to commit any files $>=$ 100 MB in size. The MCMC output from models with a large number of parameters could easily exceed this size, making LFS a must. This section describes installing Git LFS locally. Later on we describe how to install Git LFS on your EC2 instance, as it does not come pre-installed with the AMI we will be working with. Remember, Git LFS is a subscription service, and you first need to set this up on your [GitHub](http://www.github.com) account. If you don't need Git LFS then you can skip this section and the code below where we install Git LFS on our Amazon EC2 instance.
+
+Getting Git LFS to work correctly on the mac can be confusing, since git is typically installed in `/usr/bin`, while homebrew installs Git LFS in `usr/local/bin`. Unfortunately, both Git and Git LFS need to be in the same directory to work. In addition, you need to set the PATH so that your shell looks in these directories when git is invoked. For a brief foray into PATH enlightenment see [Chris Bednarski's blog post](https://cbednarski.com/articles/understanding-environment-variables-and-the-unix-path/). Lastly, you need to commit a .gitattributes file to your Git repository specifying which files should be handled using git LFS. Got all that? Here are the steps. **Make sure you do not have any large files ($>=$100 MB) commits before doing this!**
+
+1.  Install homebrew from the terminal.
+
+    ```bash
+    bash /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)
+    ```
+
+2.  Install Git using homebrew.
+
+    ```bash
+    brew install git
+    ```
+
+3.  Install Git LFS using homebrew.
+
+    ```bash
+    brew install git-lfs
+    ```
+
+4.  Make sure that Git and Git LFS are both located in the same directory, your `/usr/local/bin`.
+
+5.  Add /usr/local/bin to your path.
+
+    ```bash
+    echo 'export PATH="/usr/local/bin:/usr/local/sbin:~/bin:$PATH"' >> ~/.bash_profile
+    ```
+
+6.  Type `which git` in the terminal to make sure your shell defaults to the git installation in `/usr/local/bin`.
+
+7.  If using Tower, select this version of Git under Preferences, Git Config:
+
+<br><center>
+<div style="width:500px; height=500px">
+![alt text](ReadMeImage1.png)
+</div>
+<br></center>
+
+8.  Before you do any commits involving large files, either create or amend the .gitattributes file to associate a file type with Git FLS. In our case this will be all rda files so we type:
+    
+    ```bash
+    git lfs track *.rda
+    ```
+
+9.  Commit this change to .gitattributes and push it to the remote Git repository.
+
+<br>
+
+#### III. Using SSH with your Git repository
+
+We will now generate an SSH key (two files - a public key that you share with the world and a private key you keep safe) that we will associate with our Git account. This will allow us to clone our Git repository on an EC2 instance without having to manually type in your username and password or (worse yet) put your password in cleartext when using a script.
+
+1.  In terminal create an SSH key, substituting your email address.
+
+    ```bash
+    SSH-keygen -t rsa -b 4096 -C cccweb@icloud.com
+    ```
+
+2.  Save the key to the default directory, `~/.ssh`.
+
+3.  Skip entering a pass-phrase.
+
+4.  Check that the public and private key are in  `~/.ssh` by going to the directory and typing `ls -l id_rsa*`. You should see two files, the public key named         `id_rsa.pub` and the private key named `id_rsa`.
+
+    ```bash
+    -rw-r--r--  1 coldwater  staff  3243 Mar 15 10:19 id_rsa
+    -rw-r--r--  1 coldwater  staff   743 Mar 15 10:19 id_rsa.pub
+    ```
+5. From the terminal, make sure this private key is not publicly viewable. 
+
+    ```bash
+    chmod 600 ~/.ssh/id_rsa
+    ```
+    
+6.  Check that this worked by typing `ls -l id_rsa*`. Notice that now the private key can only be read and written to by me, while the public key can still be read by everyone.
+    
+    ```bash
+    -rw-------  1 coldwater  staff  3243 Mar 15 10:19 id_rsa
+    -rw-r--r--  1 coldwater  staff   743 Mar 15 10:19 id_rsa.pub
+    ```
+    
+7.  Go to the settings under your [GitHub account](http//www.github.com) and then click `SSH keys` and `New SSH key`.
+
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage6.png)
+</div>
+<br></center>
+
+8.  In terminal copy your public key to the clipboard.
+
+    ```bash
+    pbcopy < ~/.ssh/id_rsa.pub
+    ```
+    
+9.  Paste this into the key box on [github](http//www.github.com) and click save. This key is available to ALL your Git repositories.
+
+<br>
+
+#### IV. Configuring and launching an Amazon EC2 instance
+
+OK, let's configure and launch our Amazon EC2 instance. We can access it via the browser, as well as SSH from the terminal. An instance is a virtual machine that runs an AMI, which specifics its software configuration. You can start with a bare-bones Ubuntu image and install R, etc, but that is time consuming. Fortunately, there are many community AMIs available that are configured for different tasks.  Louis Aslett has created an [RStudio Server AMI](http://www.louisaslett.com/RStudio_AMI/) that we will use.
+
+1.  Go to the [EC2 Dashboard](https://us-west-2.console.aws.amazon.com/ec2/v2/home?region=us-west-1#) under the [AWS Management Console](https://us-west-1.console.aws.amazon.com/console/home?region=us-west-1).
+
+2.  Make sure the region selected in the top right is as close to you as possible. If not change it.
+
+3.  Click launch instance.
+
+4.  Click Community AMIs, and type in `ami-d1e792b1`. This is the [RStudio Server AMI](http://www.louisaslett.com/RStudio_AMI/) matching my region (Northern California).
+
+5.  Select Free-Tier eligible to get started. Later as you do more intensive runs, you can alter these hardware settings.
+
+6.  Under configure instance details, select `terminate` under shutdown behavior. Leave the other options as is.
+
+7.  Leave storage and tag instance options as is.
+
+8.  Under security group, click add rule, and select HTTP. These rules are what allow you to connect to your instance via the web (port 80) or via SSH (port 22). Don't worry about the warning. Nobody can access this instance without your private key, which only you have.
+
+9.  Click launch instance and select create a key pair. Name and download your private key. Remove the .txt extension from the private key. Move the key to `~/.ssh` by typing in the terminal: 
+
+    ```bash
+    mv /Users/coldwater/Downloads/CheCastaldoAmazon.pem ~/.ssh/CheCastaldoAmazon.pem
+    ```
+
+10. In the terminal, make sure this private key is not publicly viewable.
+
+    ```bash
+    chmod 400 ~/.ssh/CheCastaldoAmazon.pem
+    ```
+
+11.  Check that this worked by typing `ls -l CheCastaldoAmazon.pem`. Notice that access to this file is even more restricted than the Git private key.
+    
+    ```bash
+    -r--------@ 1 coldwater  staff  1692 Mar 15 11:42 CheCastaldoAmazon.pem
+    ```
+    
+12. Click view instances. From this screen you can control your instance, as well as make changes to it. Note, stopping your instance is not the same as terminating it. If you want to kill an instance, you must use terminate.
+
+<br>
+
+#### V. Accessing an Amazon EC2 instance in the browser
+
+Once you instance state is green (running) you can access it from the terminal or through the web browser. 
+
+1.  From the [EC2 console](https://us-west-1.console.aws.amazon.com/ec2/v2/home?region=us-west-1#Instances:sort=instanceId), copy the Public DNS link and paste it into a new browser tab. 
+
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage2.png)
+</div>
+<br></center>
+
+2. Log in to R studio using the username `rstudio` and the password `rstudio`. Welcome to your Amazon EC2 instance! To access the command line here, click shell, under tools. 
+
+<br>
+
+#### VI. Accessing an Amazon EC2 instance via SSH
+
+Here we access your instance via SSH from the terminal. Why do this? Simple - script automation and scalability.
+
+1. First we will, secure copy our Git Hub private key to the EC2 instance. That way, it is there waiting for us when we log in and we can use it to securely clone our Git repository. To do this get the Public DNS for our instance from the [EC2 console](https://us-west-1.console.aws.amazon.com/ec2/v2/home?region=us-west-1#Instances:sort=instanceId). When using the secure copy (scp) or SSH command you will first need to specify your Amazon key pair and then the user name (ubuntu) and the public DNS of the instance you wish to connect to (ubuntu@public DNS). In the terminal and type:
+
+    ```bash
+    scp -i ~/.ssh/CheCastaldoAmazon.pem ~/.ssh/id_rsa ubuntu@ec2-52-35-131-165.us-west-2.compute.amazonaws.com:~/.ssh/
+    ```
+
+2. Now, from the terminal, SSH into your instance. 
+
+    ```bash    
+    ssh -i ~/.ssh/CheCastaldoAmazon.pem ubuntu@ec2-52-35-131-165.us-west-2.compute.amazonaws.com
+    ```
+    
+    After which you will say yes and see something similar to the following. Again, welcome to your Amazon EC2 instance!
+    
+    ```bash
+    The authenticity of host 'ec2-52-35-131-165.us-west-2.compute.amazonaws.com (52.35.131.165)' can't be established.
+    ECDSA key fingerprint is SHA256:iwfo8uhyBDJAthQQjxWnkcRSKK9XqE+0hSmr96zLHRQ.
+    Are you sure you want to continue connecting (yes/no)? yes
+    Warning: Permanently added 'ec2-52-35-131-165.us-west-2.compute.amazonaws.com,52.35.131.165' (ECDSA) to the list of known hosts.
+    Welcome to Ubuntu 14.04.3 LTS (GNU/Linux 3.13.0-74-generic x86_64)
+
+    * Documentation:  https://help.ubuntu.com/
+
+    System information as of Tue Mar 15 16:45:10 UTC 2016
+
+    System load: 0.52              Memory usage: 5%   Processes:       81
+    Usage of /:  44.3% of 9.71GB   Swap usage:   0%   Users logged in: 0
+
+    Graph this data and manage this system at:
+    https://landscape.canonical.com/
+
+    Get cloud support with Ubuntu Advantage Cloud Guest:
+    http://www.ubuntu.com/business/services/cloud
+
+
+    ubuntu@ip-172-31-30-91:~$ 
+    ```
+
+3. Type `ls -l ~/.ssh` and you should see your Git private key, with appropriate permissions, saved in the `~/.ssh` folder.
+
+    ```bash
+    -rw------- 1 ubuntu ubuntu  399 Mar 15 16:45 authorized_keys
+    -rw------- 1 ubuntu ubuntu 3243 Mar 15 18:32 id_rsa
+    ```
+4. Sometimes as this point there is a permissions error, where the user ubuntu (you) is not the owner of the home directory. This make it impossible to clone your Git repository there. To check this type:
+
+    ```bash
+    cd /home
+    cd ..
+    ls -l
+    ```
+  Looking below, I see that root is the owner of home.
+  
+    ```bash
+    ubuntu@ip-172-31-30-91:/$ ls -l
+    total 76
+    drwxr-xr-x   2 root root  4096 Dec 18 20:55 bin
+    drwxr-xr-x   3 root root  4096 Dec 18 20:55 boot
+    drwxr-xr-x  13 root root  3820 Mar 15 16:45 dev
+    drwxr-xr-x  99 root root  4096 Mar 15 16:45 etc
+    drwxr-xr-x   5 root root  4096 Mar 15 20:43 home
+    ``` 
+    
+    To fix this I type:
+      
+    ```bash    
+    sudo chown -R ubuntu:ubuntu /home
+    ```
+    
+    And now, `ls -l` shows:
+    
+    ```bash
+    ubuntu@ip-172-31-30-91:/$ ls -l
+    total 76
+    drwxr-xr-x   2 root root      4096 Dec 18 20:55 bin
+    drwxr-xr-x   3 root root      4096 Dec 18 20:55 boot
+    drwxr-xr-x  13 root root      3820 Mar 15 16:45 dev
+    drwxr-xr-x  99 root root      4096 Mar 15 16:45 etc
+    drwxr-xr-x   5 ubuntu ubuntu  4096 Mar 15 20:43 home
+    ``` 
+
+5. FYI, to logout, type `exit`. Note this doesn't kill the EC2 instance! You are just logged out of it. Go back to the [EC2 console](https://us-west-2.console.aws.amazon.com/ec2/v2/home?region=us-west-2#) and your instance still will be running.
+
+<br>
+
+#### VII. Cloning a Git repository on your Amazon EC2 instance
+ 
+The good news is Git is installed be default on this AMI. However, the bad news is we still need to install Git LFS and securely get our private key onto our instance so we can clone our repository.
+
+1. From the terminal, run a script from [packagecloud](https://packagecloud.io/github/git-lfs/install) that allows us to install Git LFS using apt-get utility.
+
+    ```bash
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+    ```
+
+2. Now install Git LFS. 
+
+    ```bash
+    sudo apt-get install git-lfs
+    ```
+
+3. Typing `which git` shows the Git install in `/usr/bin/` on your instance. Typing `ls -l /usr/bin/git*` shows Git and Git LFS in the same folder, which is exactly where they need to be.
+
+4. Go to the repository you wish to clone on [GitHub account](http//www.github.com) and copy the SSH link for the master branch under the code tab.
+
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage3.png)
+</div>
+<br></center>
+
+5. In the terminal, move to the home directory and then clone the master branch to this Amazon EC2 instance. Now your Git repository is cloned to the home directory of your Amazon EC2 instance.
+
+    ```bash
+    cd /home
+    git clone git@github.com:CCheCastaldo/MAPPPD-Model.git
+    ```
+    
+<br>
+
+#### VIII. Installing and configuring the AWS Command Line Interface (CLI)
+
+So that was a lot of hassle, no two ways about it. Let's now take a different approach and use a set of command line tools to automate this entire process. Sound good? Some quick preliminaries - when you log into the AWS website, you use a username (your email) and password to verify who you are. To use the CLI, you will not authenticate using a username/password but instead with an access key. This is a little confusing, so remember this access key identifies who you are to AWS. This is different from the key pair you use to connect to an instance ([III. Configuring and launching an Amazon EC2 instance][]). This is like being on a guest list to get into a convention (your AWS access key) and then having a ticket for a specific event (your instance) at the convention (your key pair).
+
+1. Create an AWS access key by going to security credentials in the [AWS console](https://us-west-1.console.aws.amazon.com/console/home?region=us-west-1).
+
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage4.png)
+</div>
+<br></center>
+
+2. Click Create New Access Key. The key is composed of two parts, your public Access Key ID and your Secret Access Key. Both of these parts are saved in a text file which you should download now.
+
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage5.png)
+</div>
+<br></center>
+
+3. Like before, let's move the key to `~/.ssh`. I'll rename it now too and change the security credentials.
+
+    ```bash
+    mv /Users/coldwater/Downloads/rootkey.csv ~/.ssh/CheCastaldoAmazonAWS.csv
+    chmod 400 ~/.ssh/CheCastaldoAmazonAWS.csv
+    ```
+    
+4. Check that it python is installed by typing `python --version` in terminal.
+
+5. If not, download and install the latest 2.7 package from the [python website](https://www.python.org/downloads/).
+
+6. Download and unzip the [AWS CLI Bundled Installer](http://docs.aws.amazon.com/cli/latest/userguide/installing.html#install-bundle-other-os)
+
+    ```bash
+    cd /users/coldwater/downloads
+    curl "https://s3.amazonaws.com/aws-cli/awscli-bundle.zip" -o "awscli-bundle.zip"
+    unzip awscli-bundle.zip
+    ```
+    
+7. Install the command line tools. From [AWS](http://docs.aws.amazon.com/cli/latest/userguide/installing.html#install-bundle-other-os), this command "installs the AWS CLI at /usr/local/aws and create the symlink aws at the /usr/local/bin directory. Using the -b option to create a symlink eliminates the need to specify the install directory in the user's $PATH variable. This should enable all users to call the AWS CLI by typing aws from any directory."
+
+    ```bash
+    sudo ./awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+    ```
+
+8. Check the install with `/usr/local/bin/aws --version`. You should see the aws-cli version.
+
+    ```bash
+    aws-cli/1.10.13 Python/2.7.10 Darwin/15.3.0 botocore/1.4.4
+    ```
+
+9. Type `aws configure`. You should now enter your access key id and secret access key from your AWS access key. To see these values quickly just type `cat ~/.ssh/CheCastaldoAmazonAWS.csv` in the terminal. Next chose the [geographic region code](http://docs.aws.amazon.com/general/latest/gr/rande.html) closest to you. You can leave the output format blank (hit enter).
+
+    ```bash
+    AWS Access Key ID [None]: AKIAIWPG6RASEO27MEUA
+    AWS Secret Access Key [None]: blahblahblah
+    Default region name: us-west-1 
+    Default output format [None]: 
+    ```
+
+10. The CLI stores the key information in a file named `credentials` and the region and output format in a file called `config` both in `~\.aws`.
+
+    ```bash
+    Christians-MacBook-Pro:.aws coldwater$ ls -la
+    total 16
+    drwxr-xr-x   4 coldwater  staff   136 Mar 16 10:51 .
+    drwxr-xr-x+ 34 coldwater  staff  1156 Mar 16 10:49 ..
+    -rw-------   1 coldwater  staff    29 Mar 16 10:51 config
+    -rw-------   1 coldwater  staff   116 Mar 16 10:41 credentials
+    ```
+
+11. Define a [security group](http://docs.aws.amazon.com/cli/latest/userguide/cli-ec2-sg.html) and add a rule for SSH access. that you will use for your EC2 instances. The vpic-id corresponds to the [EC2-VPC](http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/default-vpc.html) from your chosen region. You can create your own, or use the default, which can be found at Networking-VPC tab in the [AWS Management Console](https://us-west-1.console.aws.amazon.com/console/home?region=us-west-1).
+
+    ```bash
+    aws ec2 create-security-group --group-name CheCastaldoDefaultSecurity --description "Default Security Group" --vpc-id vpc-9c5726f9
+    ```
+    
+12. Add rule to this security group to allow SSH access to your EC2 over port 22 from any machine.
+
+    ```bash
+    aws ec2 authorize-security-group-ingress --group-name CheCastaldoDefaultSecurity --protocol tcp --port 22 --cidr 0.0.0.0/0
+    ```
+
+13. To see or delete any of these security groups type the following in terminal. These security groups will also be available to you if you launch an instance through the AWS console. Also, this is how you find the security group id, which you will need to launch your instance.
+
+    ```bash
+    aws ec2 describe-security-groups --group-names CheCastaldoDefaultSecurity
+    aws ec2 delete-security-group --group-name CheCastaldoDefaultSecurity
+    ```
+
+14. If you haven't done so already, you can create a key pair from the terminal. It is best to do this in the `~/.ssh` directory. Also alter the permission on this key to be seen only by you. 
+
+    ```bash
+    aws ec2 create-key-pair --key-name CheCastaldoAmazon --query 'KeyMaterial' --output text > CheCastaldoAmazon.pem
+    chmod 400 ~/.ssh/CheCastaldoAmazon.pem
+    ```
+
+15. To see or delete any of these key pairs type the following in terminal. Like security groups, this key will also be available to you if you launch an instance through the AWS console.
+
+    ```bash
+    aws ec2 describe-key-pairs
+    aws ec2 delete-key-pair --key-name CheCastaldoAmazon
+    ```
+    
+<br>
+
+#### IX. Putting it all together
+
+We will now use AWS CLI, Git, bash shell, and R commands to (1) configure and create an Amazon EC2 instance, (2) connect to it in order to clone a Git repository, run the R script `GenericEC2Run.R`, and save the R output, then (3) publish these changes to your project's remote Git repository as a new branch, before (4) terminating the instance. This will involve a sequence of four scripts, each of which we discuss below in turn.
+
+<br><center>
+<div style="width:750px; height=750px">
+![alt text](ReadMeImage8.png)
+</div>
+<br></center>
+
+##### Startup.bash: Using CLI to create and connect to EC2 instances
+
+This script does what we did in section IV, except this time we will be using the AWS CLI commands to create and connect to EC2 instances.
+
+1. Assign a shell variable called `run` that is the name of the R script we ultimately want to run. It also specifies the folder containing all files associated with running this script on our instance as well as the branch name we will check out, push, and publish on our remote Git repository. Here that is `GenericEC2Run`.
+
+    ```bash
+    run=GenericEC2Run
+    ```
+
+2. Launch EC2 instance from terminal. Notice we supply the hardware configuration, the AMI, the number of instances we wish to create, the name of our key pair, and our security group. We also specify the shutdown behavior. Finally, we query the output from this command to get the instance id, which we save to a shell variable called `instance_id` whose value is the unique instance id associated with the instance we just created.
+
+    ```bash
+    instance_id=$(aws ec2 run-instances --image-id ami-d1e792b1 --security-group-ids sg-7342b517 --count 1 --instance-type t2.micro --key-name CheCastaldoAmazon --instance-initiated-shutdown-behavior terminate --query 'Instances[0].{d:InstanceId}' --output text)
+    ```
+    
+3. Wait until the instance is up and running before doing anything else. We need our instance's public DNS to access this instance, but it takes Amazon a few minutes to create our instance in the first place before we can even grab it. The wait command will only finish after the specified condition is met- here it is when our particular instance is running.
+
+    ```bash
+    aws ec2 wait instance-running --instance-ids $instance_id
+    ```
+
+4. Save the public DNS on of the instance we just created to a variable called `dns`. To see it type`echo $dns`.
+
+    ```bash
+    dns=$(aws ec2 describe-instances --instance-ids $instance_id --query 'Reservations[*].Instances[*].PublicDnsName' --output text | grep a)
+    echo $dns
+    ```
+
+5. Even though the instance is running, it can take several moments before you can SSH in. This bit of code forces our script to wait until port 22 is available on our new instance. Thanks to James Saryerwinnie for this bit of ingenious code, which can be seen in his [AWS re:Invent 2015 presentation](https://www.youtube.com/watch?v=TnfqJYPjD9I&feature=youtu.be&t=1303) and found on his [Git Hub](https://github.com/awslabs/awscli-reinvent2015-examples/blob/master/scripts/dev-ec2-instance).
+
+    ```bash
+    wait_for_port() {
+    local port=22
+    local host=$dns
+    while ! nc -z "$host" "$port" >/dev/null; do
+      sleep 5
+      done
+    }
+    wait_for_port
+    ```
+
+6. Secure copy our Git Hub private key to the EC2 instance. The  `UserKnownHostsFile` and `StrictHostKeyChecking` options removes the host verification prompt (the computer asks you to type yes or no to continue). Removing this is essential if we want to run these actions in a script.
+
+    ```bash
+    scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ~/.ssh/id_rsa ubuntu@$dns:~/.ssh/
+    ````
+
+7.  Use SSH to remotely change the ownership of the `home` and `/usr/local/lib/R/site-library` folders to ubuntu so we can clone our Git repository and install new R packages that did not come preinstalled with the AMI.
+
+    ```bash
+    ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ubuntu@$dns "sudo chown -R ubuntu:ubuntu /home"
+    ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ubuntu@$dns "sudo chown -R ubuntu:ubuntu /usr/local/lib/R/site-library/"
+    ```
+    
+8. Secure copy a shell script `Job.bash` containing the things we actually want to do on our new instance to `home`. Note we are using the shell variable `run` we defined at the start of `Startup.bash`.
+
+    ```bash
+    scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem /Users/coldwater/Library/Mobile\ Documents/com~apple~CloudDocs/Research/MAPPPDModel/ModelBuild/$run/Job.bash ubuntu@$dns:/home
+    ```
+
+9. Run the shell script `Job.bash`.
+
+    ```bash
+    run=GenericEC2Run
+    ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/CheCastaldoAmazon.pem ubuntu@$dns "bash /home/Job.bash"
+    ```
+  
+10. After `Job.bash` is done, terminate the instance.
+
+    ```bash
+    aws ec2 terminate-instances --instance-ids $instance_id
+    ```
+<br>
+
+##### Job.bash: Using Git and invoking R
+
+This script performs the tasks we did in section VI, mainly installing Git LTS and cloning our Git repository. This script then runs `Rsetup.R` which we discuss below.
+
+1. Assign the same shell variable called `run` that we did above.
+
+    ```bash
+    run=GenericEC2Run
+    ```
+
+2. Install apt-get, then Git LFS, and finally cloning our own Git repository. The only new wrinkle is that we create a config file in `~/.ssh` and add a line to suppress host checking when accessing github.com. This will keep the instance from forcing you to type yes when cloning. Lastly, we set our Git identity globally on this instance so we can publish our commits.
+
+    ```bash
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+    cd /usr/bin
+    sudo apt-get install git-lfs
+    cd /home
+    echo 'Host github.com
+      StrictHostKeyChecking no' > ~/.ssh/config
+    git clone git@github.com:CCheCastaldo/MAPPPD-Model.git
+    git config --global email.address "cccweb@icloud.com"
+    git config --global user.name "CCheCastaldo"
+    ```
+
+3. Checkout a new branch, which is named using the `run` shell variable value, GenericEC2Run.
+
+    ```bash
+    cd MAPPPD-Model
+    git checkout -b $run
+    ```
+    
+4. Run `Rsetup.R` from the command line. Remember, `Rsetup.R` sources the actual R job we want to run and is the motivation for this entire tutorial! Here we pass it a command, which is also `run` shell variable value, GenericEC2Run.
+
+    ```bash
+    cd ModelBuild/$run
+    Rscript --no-save --no-restore --verbose Rsetup.R $run
+    ```
+
+5. Lastly, stage and push our commits to the local branch named `GenericEC2Run`, before publishing this branch to the remote Git repository.
+
+    ```bash
+    git add --all
+    git commit -m "ec2 run complete"
+    git push -u origin $run
+    ```
+
+<br>
+
+##### Rsetup.R: Installing the R packages and running the R script
+
+This script installs the R libraries needed for our R script, GenericEC2Run.R, to run and then sources this script.
+
+1. Use the `args` command to store in a vector the arguments passed to`Rsetup.R`. In this case it stores only the `run` shell variable value, GenericEC2Run, as a scalar `args[1]`.
+
+    ```bash
+    args = commandArgs(trailingOnly=TRUE)
+    ```
+
+2. Use `args[1]` to define a text file where we will save all our R output and messages with the sink command.
+
+    ```bash
+    out <- paste(args[1],".txt",sep="")
+    sink(out, type = c("output", "message"))
+    ```
+3. Install necessary R packages to run `GenericEC2Run.R`.   
+
+    ```bash
+    install.packages(pkgs=c("plyr","gdata","knitr","markdown","rjags","coda"), quiet=T)
+    ```
+    
+4. Change the working directory to the folder containing `GenericEC2Run.R` and source this script.
+
+    ```bash
+    modelBuild <- "/home/MAPPPD-Model/ModelBuild/"
+    wd <- paste(modelBuild,args[1],sep="")
+    setwd(wd)
+    file <- paste(args[1],".R",sep="")
+    source(file, verbose=TRUE)
+    ```
+ 
+<br>
+
+##### X. Final workflow
+
+This is my tentative workflow suggestion. 
+
+1. Create a folder that has the four scripts discussed in the previous section. 
+
+2. When you want to do an EC2 run, make a copy of the folder and replace `GenericEC2Run.R` with whatever R script you want to run on your instance. 
+
+3. Rename the folder with this same name.
+
+4. Open `Startup.bash` and `Job.bash` and change the run variable to also match this name.
+
+5. In the terminal go this folder and run the `Startup.bash`.
+
+    ```bash
+    bash Statup.bash
+    ```
+    
+6. When the job is done running, it should appear in your remote Git repository as a new branch.
+
+7. Merge the branch with your master branch and delete the remote branch and then pull to your local Git repository.
+
+
+
+
+
